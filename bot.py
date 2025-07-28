@@ -113,6 +113,10 @@ async def catch_all(message: Message):
     uid = message.from_user.id
     text = message.text.strip()
 
+    # ✅ Ignore all commands so they don't become tasks
+    if text.startswith("/"):
+        return
+
     if text.isdigit():  # marking task as done
         index = int(text) - 1
         tasks = USER_TASKS.get(uid, [])
@@ -159,9 +163,25 @@ async def send_daily_report(uid):
 # --- CRON JOB ENDPOINT (For External Trigger) ---
 @dp.message(F.text == "/send_report_all")
 async def send_report_all(message: Message):
-    for uid in USER_TASKS.keys():
-        await send_daily_report(uid)
-    await message.answer("✅ Reports sent to all users.")
+    print("🔥 /send_report_all triggered!")
+    all_users = {5480597971} | set(USER_TASKS.keys())
+    
+    for uid in all_users:
+        try:
+            print(f"➡️ Sending report to {uid}")
+            await send_daily_report(uid)
+        except Exception as e:
+            print(f"❌ Failed to send to {uid}: {e}")
+    
+    await message.answer("✅ Reports attempted for all users (check logs).")
+
+
+
+# ✅ Test command to send report to you manually
+@dp.message(F.text == "/send_me_report")
+async def send_me_report(message: Message):
+    await send_daily_report(5480597971)
+    await message.answer("📨 Sent report to you manually!")
 
 # --- MAIN ---
 async def main():
