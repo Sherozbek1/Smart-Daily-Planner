@@ -10,13 +10,16 @@ from aiogram.types import (
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.filters import Command  # ✅ Import Command filter
 
 # --- BOT TOKEN ---
 BOT_TOKEN = "8387365932:AAGmMO0h2TVNE-bKpHME22sqWApfm7_UW6c"
-ADMIN_ID = 5480597971  # Your Telegram ID (only admin can use /send_report_all)
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
+
+# --- ADMIN ID ---
+ADMIN_ID = 5480597971  # ✅ Your Telegram ID
 
 # --- LANGUAGES ---
 LANGUAGES = {"en": "🇬🇧 English", "ru": "🇷🇺 Russian"}
@@ -114,6 +117,10 @@ async def catch_all(message: Message):
     uid = message.from_user.id
     text = message.text.strip()
 
+    # ✅ Prevent commands from being added as tasks
+    if text.startswith("/"):
+        return
+
     if text.isdigit():  # marking task as done
         index = int(text) - 1
         tasks = USER_TASKS.get(uid, [])
@@ -158,10 +165,14 @@ async def send_daily_report(uid):
     )
 
 # --- CRON JOB ENDPOINT (Admin Only) ---
-@dp.message(F.text == "/send_report_all")
+@dp.message(Command("send_report_all"))
 async def send_report_all(message: Message):
     if message.from_user.id != ADMIN_ID:
         await message.answer("⛔ You are not authorized to use this command.")
+        return
+
+    if not USER_TASKS:
+        await message.answer("⚠️ No users to send reports to.")
         return
 
     for uid in USER_TASKS.keys():
