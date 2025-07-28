@@ -2,6 +2,7 @@ import asyncio
 import json
 import random
 from datetime import datetime, timedelta
+import pytz
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton,
@@ -10,7 +11,6 @@ from aiogram.types import (
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.filters import Command  # ✅ Import Command filter
 
 # --- BOT TOKEN ---
 BOT_TOKEN = "8387365932:AAGmMO0h2TVNE-bKpHME22sqWApfm7_UW6c"
@@ -18,16 +18,26 @@ BOT_TOKEN = "8387365932:AAGmMO0h2TVNE-bKpHME22sqWApfm7_UW6c"
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 
-# --- ADMIN ID ---
-ADMIN_ID = 5480597971  # ✅ Your Telegram ID
+# --- FILE STORAGE ---
+DATA_FILE = "data.json"
+
+# --- DATA STRUCTURES ---
+DATA = {"users": {}}
+
+def load_data():
+    global DATA
+    try:
+        with open(DATA_FILE, "r") as f:
+            DATA = json.load(f)
+    except FileNotFoundError:
+        DATA = {"users": {}}
+
+def save_data():
+    with open(DATA_FILE, "w") as f:
+        json.dump(DATA, f)
 
 # --- LANGUAGES ---
 LANGUAGES = {"en": "🇬🇧 English", "ru": "🇷🇺 Russian"}
-
-# --- DATA STORAGE ---
-USER_LANGS = {}
-USER_TASKS = {}
-USER_STATS = {}  # {user_id: {"completed": int, "streak": int, "last_active": "YYYY-MM-DD"}}
 
 # --- MOTIVATIONAL MESSAGES ---
 MOTIVATIONS = [
@@ -40,14 +50,13 @@ MOTIVATIONS = [
     "⚡ Your effort today builds your future tomorrow."
 ]
 
-# --- INLINE LANGUAGE SELECTION ---
+# --- KEYBOARDS ---
 def get_language_markup():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=LANGUAGES[code], callback_data=f"lang:{code}")]
         for code in LANGUAGES
     ])
 
-# --- MAIN KEYBOARD ---
 def get_main_reply_keyboard():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="➕ Add Task"), KeyboardButton(text="📋 List Tasks")],
@@ -58,101 +67,132 @@ def get_main_reply_keyboard():
 # --- START COMMAND ---
 @dp.message(F.text == "/start")
 async def cmd_start(message: Message):
-    await message.answer("Please choose your language:", reply_markup=get_language_markup())
+    uid = str(message.from_user.id)
+    if uid not in DATA["users"]:
+        DATA["users"][uid] = {
+            "lang": "en",
+            "tasks": [],
+            "completed": 0,
+            "streak": 0,
+            "last_active": "",
+            "name": None
+        }
+        save_data()
+    await message.answer(
+        "👋 Welcome to <b>Smart Daily Planner</b>!\n\n"
+        "I'll help you stay productive and track your progress.\n"
+        "First, choose your language:", reply_markup=get_language_markup()
+    )
 
 @dp.callback_query(F.data.startswith("lang:"))
 async def set_language(callback: CallbackQuery):
+    uid = str(callback.from_user.id)
     lang_code = callback.data.split(":")[1]
-    USER_LANGS[callback.from_user.id] = lang_code
+    DATA["users"][uid]["lang"] = lang_code
+    save_data()
     await callback.message.answer(
-        f"Language set to {LANGUAGES[lang_code]}.\n\nWhat would you like to do?",
-        reply_markup=get_main_reply_keyboard()
+        f"✅ Language set to {LANGUAGES[lang_code]}.\n\nWhat's your nickname? (Type it below)",
     )
     await callback.answer()
+
+# --- NICKNAME SETUP ---
+@dp.message(F.text.regexp("^[A-Za-z0-9_]{2,20}$"))
+async def set_nickname(message: Message):
+    uid = str(message.from_user.id)
+    if DATA["users"][uid].get("name") is None:
+        DATA["users"][uid]["name"] = message.text
+        save_data()
+        await message.answer(
+            f"✅ Nice to meet you, <b>{message.text}</b>!\n"
+            "Now you can start adding tasks or check your profile.",
+            reply_markup=get_main_reply_keyboard()
+        )
+    else:
+        await catch_all(message)
 
 # --- ADD TASK ---
 @dp.message(F.text == "➕ Add Task")
 async def add_task(message: Message):
-    await message.answer("Send me the task you want to add.")
+    await message.answer("✍️ Send me the task you want to add.")
 
 # --- LIST TASKS ---
 @dp.message(F.text == "📋 List Tasks")
 async def list_tasks(message: Message):
-    uid = message.from_user.id
-    tasks = USER_TASKS.get(uid, [])
+    uid = str(message.from_user.id)
+    tasks = DATA["users"][uid]["tasks"]
     if not tasks:
-        await message.answer("You have no tasks.")
+        await message.answer("📭 You have no tasks.")
     else:
-        await message.answer("Here are your tasks:\n" + "\n".join([f"{i+1}. {t}" for i, t in enumerate(tasks)]))
+        await message.answer("📝 Your tasks:\n" + "\n".join([f"{i+1}. {t}" for i, t in enumerate(tasks)]))
 
 # --- MARK DONE ---
 @dp.message(F.text == "✅ Mark Done")
 async def done_task_prompt(message: Message):
-    uid = message.from_user.id
-    tasks = USER_TASKS.get(uid, [])
+    uid = str(message.from_user.id)
+    tasks = DATA["users"][uid]["tasks"]
     if not tasks:
-        await message.answer("You have no tasks.")
+        await message.answer("📭 You have no tasks.")
         return
     await message.answer("Send the number of the task to mark as done:\n" + "\n".join([f"{i+1}. {t}" for i, t in enumerate(tasks)]))
 
-# --- DAILY REPORT (User Requested) ---
+# --- DAILY REPORT ---
 @dp.message(F.text == "📊 Daily Report")
 async def daily_report(message: Message):
-    await send_daily_report(message.from_user.id)
+    await send_daily_report(str(message.from_user.id))
 
-# --- PROFILE SECTION ---
+# --- PROFILE ---
 @dp.message(F.text == "👤 Profile")
 async def profile(message: Message):
-    uid = message.from_user.id
-    stats = USER_STATS.get(uid, {"completed": 0, "streak": 0})
+    uid = str(message.from_user.id)
+    user = DATA["users"][uid]
     await message.answer(
-        f"👤 <b>Your Profile</b>\n"
-        f"✅ Tasks Completed: {stats['completed']}\n"
-        f"🔥 Streak: {stats['streak']} days"
+        f"👤 <b>Profile</b>\n"
+        f"🆔 ID: <code>{uid}</code>\n"
+        f"🏷️ Name: {user.get('name', 'Not set')}\n"
+        f"✅ Tasks Completed: {user['completed']}\n"
+        f"🔥 Streak: {user['streak']} days"
     )
 
-# --- CATCH-ALL: Task Adding & Marking Done ---
+# --- CATCH-ALL ---
 @dp.message()
 async def catch_all(message: Message):
-    uid = message.from_user.id
+    uid = str(message.from_user.id)
     text = message.text.strip()
 
-    # ✅ Prevent commands from being added as tasks
-    if text.startswith("/"):
-        return
-
-    if text.isdigit():  # marking task as done
+    if text.isdigit():  
         index = int(text) - 1
-        tasks = USER_TASKS.get(uid, [])
+        tasks = DATA["users"][uid]["tasks"]
         if 0 <= index < len(tasks):
             task = tasks.pop(index)
             update_user_stats(uid)
+            save_data()
             await message.answer(f"✅ Task marked as done: {task}")
         else:
-            await message.answer("Invalid task number.")
-    else:  # adding task
-        USER_TASKS.setdefault(uid, []).append(text)
-        await message.answer(f"Task added: {text}")
+            await message.answer("❌ Invalid task number.")
+    else:
+        DATA["users"][uid]["tasks"].append(text)
+        save_data()
+        await message.answer(f"🆕 Task added: {text}")
 
-# --- HELPER: Update Streak & Stats ---
+# --- UPDATE STATS ---
 def update_user_stats(uid):
     today = datetime.now().strftime("%Y-%m-%d")
-    stats = USER_STATS.setdefault(uid, {"completed": 0, "streak": 0, "last_active": ""})
-
-    stats["completed"] += 1
-    if stats["last_active"] == today:
+    user = DATA["users"][uid]
+    user["completed"] += 1
+    if user["last_active"] == today:
         return
-    if stats["last_active"] == (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"):
-        stats["streak"] += 1
+    if user["last_active"] == (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"):
+        user["streak"] += 1
     else:
-        stats["streak"] = 1
-    stats["last_active"] = today
+        user["streak"] = 1
+    user["last_active"] = today
 
-# --- HELPER: Send Daily Report ---
+# --- SEND DAILY REPORT ---
 async def send_daily_report(uid):
-    tasks = USER_TASKS.get(uid, [])
+    user = DATA["users"][uid]
+    tasks = user["tasks"]
     total = len(tasks)
-    completed = USER_STATS.get(uid, {}).get("completed", 0)
+    completed = user["completed"]
     percent = int((completed / (completed + total)) * 100) if (completed + total) else 0
     motivation = random.choice(MOTIVATIONS)
 
@@ -164,25 +204,23 @@ async def send_daily_report(uid):
         f"💡 {motivation}"
     )
 
-# --- CRON JOB ENDPOINT (Admin Only) ---
-@dp.message(Command("send_report_all"))
-async def send_report_all(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        await message.answer("⛔ You are not authorized to use this command.")
-        return
-
-    if not USER_TASKS:
-        await message.answer("⚠️ No users to send reports to.")
-        return
-
-    for uid in USER_TASKS.keys():
-        await send_daily_report(uid)
-
-    await message.answer("✅ Reports sent to all users.")
+# --- SCHEDULED REPORTS AT 9 PM UZ TIME ---
+async def scheduled_reports():
+    tz = pytz.timezone("Asia/Tashkent")
+    while True:
+        now = datetime.now(tz).strftime("%H:%M")
+        if now == "21:00":
+            print("⏰ Sending scheduled reports...")
+            for uid in DATA["users"].keys():
+                await send_daily_report(uid)
+            await asyncio.sleep(60)
+        await asyncio.sleep(30)
 
 # --- MAIN ---
 async def main():
-    print("✅ Bot is running...")
+    load_data()
+    print("✅ Bot is running with 9 PM Uzbekistan reports...")
+    asyncio.create_task(scheduled_reports())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
