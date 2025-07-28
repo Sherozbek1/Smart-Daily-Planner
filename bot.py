@@ -13,15 +13,13 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 
 # --- BOT TOKEN ---
-BOT_TOKEN = "8387365932:AAGmMO0h2TVNE-bKpHME22sqWApfm7_UW6c"
+BOT_TOKEN = "YOUR_BOT_TOKEN"
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 
 # --- FILE STORAGE ---
 DATA_FILE = "data.json"
-
-# --- DATA STRUCTURES ---
 DATA = {"users": {}}
 
 def load_data():
@@ -36,9 +34,6 @@ def save_data():
     with open(DATA_FILE, "w") as f:
         json.dump(DATA, f)
 
-# --- LANGUAGES ---
-LANGUAGES = {"en": "🇬🇧 English", "ru": "🇷🇺 Russian"}
-
 # --- MOTIVATIONAL MESSAGES ---
 MOTIVATIONS = [
     "🔥 Keep pushing, you’re doing amazing!",
@@ -51,10 +46,10 @@ MOTIVATIONS = [
 ]
 
 # --- KEYBOARDS ---
-def get_language_markup():
+def get_streak_markup():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=LANGUAGES[code], callback_data=f"lang:{code}")]
-        for code in LANGUAGES
+        [InlineKeyboardButton(text="✅ Enable", callback_data="streak:yes")],
+        [InlineKeyboardButton(text="❌ Disable", callback_data="streak:no")]
     ])
 
 def get_main_reply_keyboard():
@@ -70,30 +65,19 @@ async def cmd_start(message: Message):
     uid = str(message.from_user.id)
     if uid not in DATA["users"]:
         DATA["users"][uid] = {
-            "lang": "en",
             "tasks": [],
             "completed": 0,
             "streak": 0,
             "last_active": "",
-            "name": None
+            "name": None,
+            "streak_enabled": False
         }
         save_data()
     await message.answer(
         "👋 Welcome to <b>Smart Daily Planner</b>!\n\n"
-        "I'll help you stay productive and track your progress.\n"
-        "First, choose your language:", reply_markup=get_language_markup()
+        "I’ll help you stay productive and track your progress.\n"
+        "First, tell me your nickname (2–20 characters)."
     )
-
-@dp.callback_query(F.data.startswith("lang:"))
-async def set_language(callback: CallbackQuery):
-    uid = str(callback.from_user.id)
-    lang_code = callback.data.split(":")[1]
-    DATA["users"][uid]["lang"] = lang_code
-    save_data()
-    await callback.message.answer(
-        f"✅ Language set to {LANGUAGES[lang_code]}.\n\nWhat's your nickname? (Type it below)",
-    )
-    await callback.answer()
 
 # --- NICKNAME SETUP ---
 @dp.message(F.text.regexp("^[A-Za-z0-9_]{2,20}$"))
@@ -104,11 +88,25 @@ async def set_nickname(message: Message):
         save_data()
         await message.answer(
             f"✅ Nice to meet you, <b>{message.text}</b>!\n"
-            "Now you can start adding tasks or check your profile.",
-            reply_markup=get_main_reply_keyboard()
+            "Do you want to enable 🔥 <b>Streak Mode</b>?\n"
+            "Streak increases only if you complete ≥80% of tasks daily.",
+            reply_markup=get_streak_markup()
         )
     else:
         await catch_all(message)
+
+@dp.callback_query(F.data.startswith("streak:"))
+async def set_streak_mode(callback: CallbackQuery):
+    uid = str(callback.from_user.id)
+    choice = callback.data.split(":")[1]
+    DATA["users"][uid]["streak_enabled"] = (choice == "yes")
+    save_data()
+    status = "enabled ✅" if choice == "yes" else "disabled ❌"
+    await callback.message.answer(
+        f"🔥 Streak mode {status}.\nYou can now start adding tasks!",
+        reply_markup=get_main_reply_keyboard()
+    )
+    await callback.answer()
 
 # --- ADD TASK ---
 @dp.message(F.text == "➕ Add Task")
@@ -145,12 +143,13 @@ async def daily_report(message: Message):
 async def profile(message: Message):
     uid = str(message.from_user.id)
     user = DATA["users"][uid]
+    streak_info = f"🔥 Streak: {user['streak']} days" if user.get("streak_enabled") else "🔥 Streak Mode: Disabled"
     await message.answer(
         f"👤 <b>Profile</b>\n"
         f"🆔 ID: <code>{uid}</code>\n"
         f"🏷️ Name: {user.get('name', 'Not set')}\n"
         f"✅ Tasks Completed: {user['completed']}\n"
-        f"🔥 Streak: {user['streak']} days"
+        f"{streak_info}"
     )
 
 # --- CATCH-ALL ---
@@ -159,33 +158,20 @@ async def catch_all(message: Message):
     uid = str(message.from_user.id)
     text = message.text.strip()
 
-    if text.isdigit():  
+    if text.isdigit():
         index = int(text) - 1
         tasks = DATA["users"][uid]["tasks"]
         if 0 <= index < len(tasks):
-            task = tasks.pop(index)
-            update_user_stats(uid)
+            tasks.pop(index)
+            DATA["users"][uid]["completed"] += 1
             save_data()
-            await message.answer(f"✅ Task marked as done: {task}")
+            await message.answer("✅ Task marked as done!")
         else:
             await message.answer("❌ Invalid task number.")
     else:
         DATA["users"][uid]["tasks"].append(text)
         save_data()
         await message.answer(f"🆕 Task added: {text}")
-
-# --- UPDATE STATS ---
-def update_user_stats(uid):
-    today = datetime.now().strftime("%Y-%m-%d")
-    user = DATA["users"][uid]
-    user["completed"] += 1
-    if user["last_active"] == today:
-        return
-    if user["last_active"] == (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"):
-        user["streak"] += 1
-    else:
-        user["streak"] = 1
-    user["last_active"] = today
 
 # --- SEND DAILY REPORT ---
 async def send_daily_report(uid):
@@ -195,6 +181,10 @@ async def send_daily_report(uid):
     completed = user["completed"]
     percent = int((completed / (completed + total)) * 100) if (completed + total) else 0
     motivation = random.choice(MOTIVATIONS)
+
+    if user.get("streak_enabled") and percent >= 80:
+        user["streak"] += 1
+    save_data()
 
     await bot.send_message(uid,
         f"📊 <b>Daily Report</b>\n"
@@ -210,8 +200,7 @@ async def scheduled_reports():
     while True:
         now = datetime.now(tz).strftime("%H:%M")
         if now == "21:00":
-            print("⏰ Sending scheduled reports...")
-            for uid in DATA["users"].keys():
+            for uid in list(DATA["users"].keys()):
                 await send_daily_report(uid)
             await asyncio.sleep(60)
         await asyncio.sleep(30)
@@ -219,7 +208,7 @@ async def scheduled_reports():
 # --- MAIN ---
 async def main():
     load_data()
-    print("✅ Bot is running with 9 PM Uzbekistan reports...")
+    print("✅ Bot is running with Streak Mode and 9 PM reports...")
     asyncio.create_task(scheduled_reports())
     await dp.start_polling(bot)
 
