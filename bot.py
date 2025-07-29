@@ -5,15 +5,14 @@ import os
 from datetime import datetime, timedelta
 import pytz
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, CallbackQuery
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
 # === CONFIG ===
 BOT_TOKEN = "8387365932:AAGmMO0h2TVNE-bKpHME22sqWApfm7_UW6c"
 ADMIN_ID = 5480597971
-
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+bot = Bot(token=BOT_TOKEN, default=Bot.DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 
 DATA_FILE = "data.json"
@@ -114,99 +113,4 @@ async def start_cmd(m: Message):
                               "tasks": [], "completed": 0, "xp": 0,
                               "streak": 0, "last_active": "", "adding": False, "marking": False}
         save_data()
-    await m.answer(TEXTS["en"]["welcome"], reply_markup=main_kb())
-
-@dp.message(F.text == "➕ Add Task")
-async def ask_task(m: Message):
-    uid = str(m.from_user.id); lang = user_lang(uid)
-    DATA["users"][uid]["adding"] = True; save_data()
-    await m.answer("✍️ Send your task:" if lang == "en" else "✍️ Отправьте задачу:")
-
-@dp.message(F.text == "📋 List Tasks")
-async def list_tasks(m: Message):
-    uid = str(m.from_user.id); lang = user_lang(uid); u = DATA["users"][uid]
-    if not u["tasks"]:
-        await m.answer(TEXTS[lang]["no_tasks"])
-    else:
-        msg = "\n".join([f"{i+1}. {t}" for i, t in enumerate(u["tasks"])])
-        await m.answer("📋 Tasks:\n" + msg)
-
-@dp.message(F.text == "✅ Mark Done")
-async def ask_done(m: Message):
-    uid = str(m.from_user.id); lang = user_lang(uid)
-    u = DATA["users"][uid]
-    if not u["tasks"]: await m.answer(TEXTS[lang]["no_tasks"]); return
-    DATA["users"][uid]["marking"] = True; save_data()
-    await m.answer(TEXTS[lang]["choose_task_num"])
-
-@dp.message(F.text == "👤 Profile")
-async def profile(m: Message):
-    uid = str(m.from_user.id); u = DATA["users"][uid]; lang = user_lang(uid)
-    await m.answer(TEXTS[lang]["profile"].format(u["name"], u["completed"], u["streak"], u["xp"], rank(u["xp"])))
-
-@dp.message(F.text == "🏆 Leaderboard")
-async def leaderboard(m: Message):
-    uid = str(m.from_user.id); lang = user_lang(uid)
-    lb = sorted(DATA["users"].values(), key=lambda x: x.get("xp", 0), reverse=True)[:10]
-    text = "\n".join([f"{i+1}. {u['name']} – {u['xp']} XP" for i, u in enumerate(lb)])
-    await m.answer(TEXTS[lang]["leaderboard"].format(text))
-
-@dp.message(F.text == "📊 Daily Report")
-async def daily_report(m: Message): await send_report(str(m.from_user.id))
-
-@dp.message()
-async def handle_input(m: Message):
-    uid = str(m.from_user.id)
-    if uid not in DATA["users"]: return
-    lang = user_lang(uid); u = DATA["users"][uid]
-
-    if u.get("adding"):
-        u["tasks"].append(m.text); u["adding"] = False; save_data()
-        await m.answer(TEXTS[lang]["task_added"].format(m.text)); return
-
-    if u.get("marking") and m.text.isdigit():
-        idx = int(m.text)-1
-        if 0 <= idx < len(u["tasks"]):
-            task = u["tasks"].pop(idx); u["completed"] += 1
-            add_xp(uid, 3); update_streak(uid); u["marking"] = False; save_data()
-            await m.answer(TEXTS[lang]["task_done"].format(task))
-        else: await m.answer(TEXTS[lang]["invalid_number"])
-        return
-
-# === Reports & Deadlines ===
-async def send_report(uid):
-    u = DATA["users"][uid]; lang = u["lang"]
-    tasks = len(u["tasks"]); comp = u["completed"]
-    percent = int((comp/(comp+tasks))*100) if (comp+tasks)>0 else 0
-    tip = random.choice(TIPS[lang]); mot = random.choice(MOTIVATIONS[lang])
-    msg = TEXTS[lang]["report"].format(comp, tasks, percent, u["xp"], f"{mot} | {tip}")
-    await bot.send_message(uid, msg)
-
-async def scheduled_reports():
-    tz = pytz.timezone("Asia/Tashkent")
-    while True:
-        now = datetime.now(tz).strftime("%H:%M")
-        if now in ["08:00", "14:00", "21:00"]:
-            for uid in DATA["users"]: await send_report(uid)
-            await asyncio.sleep(60)
-        await asyncio.sleep(30)
-
-# === Admin Commands ===
-@dp.message(F.text == "/stats")
-async def stats_cmd(m: Message):
-    if m.from_user.id == ADMIN_ID: await m.answer(f"👥 Users: {len(DATA['users'])}")
-
-@dp.message(F.text == "/backup")
-async def backup_cmd(m: Message):
-    if m.from_user.id == ADMIN_ID:
-        await m.answer_document(open(DATA_FILE, "rb"))
-
-# === Main Loop ===
-async def main():
-    load_data()
-    asyncio.create_task(scheduled_reports())
-    print("✅ Bot Running with full features")
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    await m.answer(TEXTS["en"]["welcome"] + "\n\n" + TEXTS["en"]["instructions"], reply_markup=main_kb())
