@@ -1,27 +1,26 @@
 import asyncio
 import json
 import random
-import os
 from datetime import datetime, timedelta
 import pytz
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.types import (
+    Message, ReplyKeyboardMarkup, KeyboardButton
+)
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 
-# --- CONFIG ---
-BOT_TOKEN = "8387365932:AAGmMO0h2TVNE-bKpHME22sqWApfm7_UW6c"  # Keep secret in production
-ADMIN_ID = 5480597971
+# --- BOT TOKEN ---
+BOT_TOKEN = "8387365932:AAGmMO0h2TVNE-bKpHME22sqWApfm7_UW6c"
 
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)  # ✅ Fixed initialization
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 
+# --- FILE STORAGE ---
 DATA_FILE = "data.json"
-BACKUP_DIR = "backups"
-os.makedirs(BACKUP_DIR, exist_ok=True)
 DATA = {"users": {}}
 
-# --- Load / Save ---
 def load_data():
     global DATA
     try:
@@ -33,152 +32,189 @@ def load_data():
 def save_data():
     with open(DATA_FILE, "w") as f:
         json.dump(DATA, f)
-    # backup rotation
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    with open(os.path.join(BACKUP_DIR, f"data_{timestamp}.json"), "w") as f:
-        json.dump(DATA, f)
-    files = sorted(os.listdir(BACKUP_DIR))
-    if len(files) > 3:
-        os.remove(os.path.join(BACKUP_DIR, files[0]))
 
-# --- Languages & Texts ---
-LANGUAGES = {"en": "🇬🇧 English", "ru": "🇷🇺 Russian"}
-TEXTS = {
-    "en": {
-        "welcome": "👋 Welcome to <b>Smart Daily Planner</b>!\nStay productive with tasks, streaks, XP, and more.\nChoose your language:",
-        "instructions": "📚 <b>How to use:</b>\n• ➕ Add Task → add new task\n• ✅ Mark Done → complete task\n• 📊 Daily Report → stats at 21:00\n• 🏆 Leaderboard → top users\n• 👤 Profile → view XP, streaks, rank\n💡 Use /help anytime!",
-        "help": "💡 <b>Help</b>:\n• Earn XP for tasks & streaks\n• Set deadlines (reminder 1h before)\n• Maintain streaks for bonuses\n• Ranks motivate you to grow!",
-        "rank_info": "🎖 <b>Ranks</b>:\n🎯 Rookie Planner (0–199 XP)\n⚡ Focused Achiever (200–499 XP)\n🔥 Task Crusher (500–1199 XP)\n🏆 Consistency Master (1200–2499 XP)\n🌟 Productivity Legend (2500+ XP)",
-        "no_tasks": "📭 You have no tasks.",
-        "task_added": "🆕 Task added: {}\n⏳ Enter deadline in hours (1–24) or 0 for no deadline:",
-        "deadline_set": "⏰ Deadline set at {}",
-        "invalid_number": "❌ Invalid task number.",
-        "task_done": "✅ Task completed: {}\n⭐ +3 XP",
-        "profile": "👤 <b>Profile</b>\n🆔 ID: <code>{}</code>\n🏷️ Name: {}\n✅ Completed: {}\n🔥 Streak: {} days\n⭐ XP: {} ({})",
-        "report": "📊 <b>Daily Report</b>\n✅ Completed: {}\n📌 Pending: {}\n🎯 Completion: {}%\n⭐ XP: {}\n\n💡 {}",
-        "leaderboard": "🏆 <b>Leaderboard</b>\n{}",
-    }
-}
+# --- MOTIVATIONAL MESSAGES ---
+MOTIVATIONS = [
+    "🔥 Keep pushing, you’re doing amazing!",
+    "💪 Small steps every day lead to big success.",
+    "🚀 You’re on your way to greatness, keep going!",
+    "🌟 Consistency beats motivation. Stay consistent!",
+    "🏆 Every completed task is a victory. Well done!",
+    "🌱 Grow a little every day, success will follow.",
+    "⚡ Your effort today builds your future tomorrow."
+]
 
-MOTIVATIONS = {"en": ["🔥 Keep pushing!", "💪 Small steps daily!", "🚀 You’re improving!", "🌟 Stay consistent!", "🏆 Every task counts!"]}
-TIPS = {"en": ["Set deadlines to stay on track.", "Check profile to monitor streaks.", "Use reminders!", "Consistency = success!"]}
-
-# --- Keyboards ---
-def main_kb():
+# --- MAIN KEYBOARD ---
+def get_main_reply_keyboard():
     return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton("➕ Add Task"), KeyboardButton("📋 List Tasks")],
-        [KeyboardButton("✅ Mark Done"), KeyboardButton("📊 Daily Report")],
-        [KeyboardButton("👤 Profile"), KeyboardButton("🏆 Leaderboard")]
+        [KeyboardButton(text="➕ Add Task"), KeyboardButton(text="📋 List Tasks")],
+        [KeyboardButton(text="✅ Mark Done"), KeyboardButton(text="📊 Daily Report")],
+        [KeyboardButton(text="👤 Profile")]
     ], resize_keyboard=True)
 
-# --- XP & Ranks ---
-def rank(xp):
-    if xp < 200: return "🎯 Rookie Planner"
-    if xp < 500: return "⚡ Focused Achiever"
-    if xp < 1200: return "🔥 Task Crusher"
-    if xp < 2500: return "🏆 Consistency Master"
-    return "🌟 Productivity Legend"
-
-def add_xp(uid, amount):
-    user = DATA["users"][uid]
-    today = datetime.now().strftime("%Y-%m-%d")
-    if user.get("xp_today_date") != today:
-        user["xp_today"] = 0
-        user["xp_today_date"] = today
-    gain = min(amount, 15 - user["xp_today"])
-    if gain > 0:
-        user["xp"] += gain
-        user["xp_today"] += gain
-
-# --- Deadline & Streak ---
-def update_streak(uid):
-    user = DATA["users"][uid]
-    today = datetime.now().strftime("%Y-%m-%d")
-    last = user.get("last_active", "")
-    if last == today: return
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    user["streak"] = user.get("streak", 0) + 1 if last == yesterday else 1
-    bonus = 2 if user["streak"] < 4 else 5 if user["streak"] < 8 else 10
-    user["xp"] += bonus
-    user["last_active"] = today
-
-def add_deadline(uid, task, hours):
-    if hours > 0:
-        deadline_time = (datetime.now() + timedelta(hours=hours)).timestamp()
-        DATA["users"][uid].setdefault("deadlines", []).append({"task": task, "time": deadline_time, "reminded": False})
-
-async def check_deadlines():
-    while True:
-        now = datetime.now().timestamp()
-        for uid, u in DATA["users"].items():
-            for d in u.get("deadlines", []):
-                if not d["reminded"] and 0 < d["time"] - now < 3600:
-                    await bot.send_message(uid, f"⏰ Reminder! Task <b>{d['task']}</b> is due in 1 hour!")
-                    d["reminded"] = True
-        await asyncio.sleep(600)
-
-# --- Bot Handlers ---
+# --- START COMMAND ---
 @dp.message(F.text == "/start")
-async def start_cmd(message: Message):
+async def cmd_start(message: Message):
     uid = str(message.from_user.id)
     if uid not in DATA["users"]:
-        DATA["users"][uid] = {"lang": "en", "name": message.from_user.first_name, "tasks": [],
-                              "deadlines": [], "completed": 0, "streak": 0, "last_active": "",
-                              "xp": 0, "xp_today": 0, "xp_today_date": ""}
+        DATA["users"][uid] = {
+            "user_id": uid,
+            "tasks": [],
+            "completed": 0,
+            "streak": 0,
+            "last_active": "",
+            "name": None,
+            "streak_status": "unknown"
+        }
         save_data()
-    await message.answer(TEXTS["en"]["welcome"], reply_markup=InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(v, callback_data=f"lang:{k}")] for k, v in LANGUAGES.items()]))
+    await message.answer(
+        "👋 Welcome to <b>Smart Daily Planner</b>!\n\n"
+        "I'll help you stay productive and track your progress.\n"
+        "Please send me your preferred nickname to get started!"
+    )
 
-@dp.callback_query(F.data.startswith("lang:"))
-async def set_language(callback: CallbackQuery):
-    uid = str(callback.from_user.id)
-    lang = callback.data.split(":")[1]
-    DATA["users"][uid]["lang"] = lang
-    save_data()
-    await callback.message.answer(TEXTS[lang]["instructions"])
-    await callback.answer()
-
-@dp.message(F.text == "👤 Profile")
-async def profile_cmd(message: Message):
+# --- NICKNAME SETUP ---
+@dp.message(F.text.regexp("^[A-Za-z0-9_]{2,20}$"))
+async def set_nickname(message: Message):
     uid = str(message.from_user.id)
-    u = DATA["users"][uid]
-    lang = u["lang"]
-    await message.answer(TEXTS[lang]["profile"].format(uid, u["name"], u["completed"], u["streak"], u["xp"], rank(u["xp"])))
+    if DATA["users"][uid].get("name") is None:
+        DATA["users"][uid]["name"] = message.text
+        save_data()
+        await message.answer(
+            f"✅ Nice to meet you, <b>{message.text}</b>!\n"
+            "Now you can start adding tasks or check your profile.",
+            reply_markup=get_main_reply_keyboard()
+        )
+    else:
+        await catch_all(message)
 
-@dp.message(F.text == "🏆 Leaderboard")
-async def leaderboard_cmd(message: Message):
-    lang = DATA["users"][str(message.from_user.id)]["lang"]
-    lb = sorted(DATA["users"].items(), key=lambda x: x[1].get("xp", 0), reverse=True)[:10]
-    txt = "\n".join([f"{i+1}. {u['name']} – {u['xp']} XP ({rank(u['xp'])})" for i, (uid, u) in enumerate(lb)])
-    await message.answer(TEXTS[lang]["leaderboard"].format(txt))
+# --- ADD TASK ---
+@dp.message(F.text == "➕ Add Task")
+async def add_task(message: Message):
+    await message.answer("✍️ Send me the task you want to add.")
 
-# --- Reports ---
-async def send_report(uid):
-    u = DATA["users"][uid]
-    lang = u["lang"]
-    tasks = len(u["tasks"])
-    comp = u["completed"]
-    percent = int((comp/(comp+tasks))*100) if comp+tasks > 0 else 0
-    msg = TEXTS[lang]["report"].format(comp, tasks, percent, u["xp"], random.choice(MOTIVATIONS[lang]))
-    await bot.send_message(uid, msg)
+# --- LIST TASKS ---
+@dp.message(F.text == "📋 List Tasks")
+async def list_tasks(message: Message):
+    uid = str(message.from_user.id)
+    tasks = DATA["users"][uid]["tasks"]
+    if not tasks:
+        await message.answer("📭 You have no tasks.")
+    else:
+        await message.answer("📝 Your tasks:\n" + "\n".join([f"{i+1}. {t}" for i, t in enumerate(tasks)]))
 
+# --- MARK DONE ---
+@dp.message(F.text == "✅ Mark Done")
+async def done_task_prompt(message: Message):
+    uid = str(message.from_user.id)
+    tasks = DATA["users"][uid]["tasks"]
+    if not tasks:
+        await message.answer("📭 You have no tasks.")
+        return
+    await message.answer("Send the number of the task to mark as done:\n" + "\n".join([f"{i+1}. {t}" for i, t in enumerate(tasks)]))
+
+# --- DAILY REPORT ---
+@dp.message(F.text == "📊 Daily Report")
+async def daily_report(message: Message):
+    await send_daily_report(str(message.from_user.id))
+
+# --- PROFILE ---
+@dp.message(F.text == "👤 Profile")
+async def profile(message: Message):
+    uid = str(message.from_user.id)
+    user = DATA["users"][uid]
+    await message.answer(
+        f"👤 <b>Profile</b>\n"
+        f"🆔 ID: <code>{user['user_id']}</code>\n"
+        f"🏷️ Name: {user.get('name', 'Not set')}\n"
+        f"✅ Tasks Completed: {user['completed']}\n"
+        f"🔥 Streak: {user['streak']} days"
+    )
+
+# --- CATCH-ALL ---
+@dp.message()
+async def catch_all(message: Message):
+    uid = str(message.from_user.id)
+    text = message.text.strip()
+
+    if text.isdigit():
+        index = int(text) - 1
+        tasks = DATA["users"][uid]["tasks"]
+        if 0 <= index < len(tasks):
+            task = tasks.pop(index)
+            update_user_stats(uid)
+            save_data()
+            await message.answer(f"✅ Task marked as done: {task}")
+        else:
+            await message.answer("❌ Invalid task number.")
+    else:
+        DATA["users"][uid]["tasks"].append(text)
+        save_data()
+        await message.answer(f"🆕 Task added: {text}")
+
+# --- UPDATE STATS WITH 80% RULE ---
+def update_user_stats(uid):
+    today = datetime.now().strftime("%Y-%m-%d")
+    user = DATA["users"][uid]
+
+    user["completed"] += 1
+    total_tasks = user["completed"] + len(user["tasks"])
+    completion_rate = (user["completed"] / total_tasks) * 100 if total_tasks > 0 else 0
+
+    if user["last_active"] == today:
+        return
+
+    if completion_rate >= 80:
+        if user["last_active"] == (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"):
+            user["streak"] += 1
+        else:
+            user["streak"] = 1
+        user["streak_status"] = "🔥 Streak maintained! Keep going!"
+    else:
+        user["streak"] = 0
+        user["streak_status"] = "❌ Streak lost today. Try hitting 80% tomorrow!"
+
+    user["last_active"] = today
+
+# --- SEND DAILY REPORT ---
+async def send_daily_report(uid):
+    user = DATA["users"][uid]
+    tasks = user["tasks"]
+    total = len(tasks)
+    completed = user["completed"]
+    percent = int((completed / (completed + total)) * 100) if (completed + total) else 0
+    motivation = random.choice(MOTIVATIONS)
+    streak_message = user.get("streak_status", "")
+
+    await bot.send_message(uid,
+        f"📊 <b>Daily Report</b>\n"
+        f"✅ Completed: {completed}\n"
+        f"📌 Pending: {total}\n"
+        f"🎯 Completion: {percent}%\n"
+        f"{streak_message}\n\n"
+        f"💡 {motivation}"
+    )
+
+# --- SCHEDULED REPORTS AT 9 PM UZ TIME ---
 async def scheduled_reports():
     tz = pytz.timezone("Asia/Tashkent")
     while True:
         now = datetime.now(tz).strftime("%H:%M")
-        if now in ["08:00", "14:00", "21:00"]:
-            for uid in DATA["users"]:
-                await send_report(uid)
+        if now == "21:00":
+            print("⏰ Sending scheduled reports...")
+            for uid in DATA["users"].keys():
+                await send_daily_report(uid)
             await asyncio.sleep(60)
         await asyncio.sleep(30)
 
 # --- MAIN ---
 async def main():
     load_data()
+    print("✅ Bot is running with streak status in reports...")
     asyncio.create_task(scheduled_reports())
-    asyncio.create_task(check_deadlines())
-    print("✅ Bot running successfully with deadlines & streaks")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
