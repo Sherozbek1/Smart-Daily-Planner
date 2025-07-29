@@ -11,8 +11,8 @@ from aiogram import F
 import asyncio
 import os
 
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN_HERE"
-ADMIN_ID = 123456789  # Replace with your Telegram ID
+BOT_TOKEN = os.getenv("8387365932:AAGmMO0h2TVNE-bKpHME22sqWApfm7_UW6c")
+ADMIN_ID = 5480597971 # Replace with your Telegram ID
 
 data_file = "user_data.json"
 
