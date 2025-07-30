@@ -2,8 +2,6 @@ import asyncio
 import json
 import random
 import shutil
-import os
-import glob
 from datetime import datetime, timedelta
 import pytz
 from aiogram import Bot, Dispatcher, types
@@ -12,12 +10,71 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKe
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.dispatcher.middlewares.base import BaseMiddleware
+
+# --- ANTI-SPAM CONFIG ---
+SPAM_TRACKER = {}
+SPAM_LIMIT = 5         # max messages allowed in interval
+SPAM_INTERVAL = 10     # seconds interval to count messages
+BLOCK_TIME = 10        # seconds to block user after spamming
+
+def is_spamming(user_id: int) -> bool:
+    """Check and update spam counter for a user."""
+    now = datetime.now().timestamp()
+    user = SPAM_TRACKER.get(user_id, {"last": 0, "count": 0, "blocked_until": 0})
+
+    # Check if user is currently blocked
+    if now < user["blocked_until"]:
+        return True
+
+    # Reset counter if too much time passed
+    if now - user["last"] > SPAM_INTERVAL:
+        user["count"] = 0
+
+    # Update counter
+    user["last"] = now
+    user["count"] += 1
+
+    # If exceeded spam limit → block
+    if user["count"] > SPAM_LIMIT:
+        user["blocked_until"] = now + BLOCK_TIME
+        SPAM_TRACKER[user_id] = user
+        return True
+
+    SPAM_TRACKER[user_id] = user
+    return False
+# --- ANTI-SPAM MIDDLEWARE ---
+
+
+class AntiSpamMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        uid = None
+        if hasattr(event, "from_user") and event.from_user:
+            uid = event.from_user.id
+        elif hasattr(event, "message") and getattr(event.message, "from_user", None):
+            uid = event.message.from_user.id
+
+        if uid and is_spamming(uid):
+            try:
+                if hasattr(event, "answer"):
+                    await event.answer("⛔ Slow down, please!", show_alert=False)
+                elif hasattr(event, "message"):
+                    await event.message.answer("⛔ Slow down, please!")
+            except:
+                pass
+            return  # block further handling
+        return await handler(event, data)
+
+    
+dp = Dispatcher(storage=MemoryStorage())
+dp.update.middleware(AntiSpamMiddleware())
+
 
 # --- BOT CONFIG ---
 BOT_TOKEN = "8387365932:AAGmMO0h2TVNE-bKpHME22sqWApfm7_UW6c"
 ADMIN_ID = 5480597971
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher(storage=MemoryStorage())
+
 
 # --- DATA STORAGE ---
 DATA_FILE = "data.json"
@@ -95,58 +152,19 @@ TEXTS = {
     }
 }  # (keep your existing TEXTS here, unchanged)
 
-# ===============================
-# ✅ MOTIVATIONAL MESSAGES & TIPS
-# ===============================
-
-MOTIVATIONS = [
-    "🔥 Keep pushing, you're doing amazing!",
-    "💪 Small steps every day lead to big success.",
-    "🚀 You’re on your way to greatness!",
-    "🌟 Consistency is key, stay focused!",
-    "🏆 Every completed task is a victory!",
-    "✨ Progress, not perfection, is what matters.",
-    "🎯 Stay sharp, one task at a time!",
-    "🚴‍♂️ Momentum builds success – keep moving!",
-    "⏳ Don’t wait for the perfect moment, make it now!",
-    "🌄 Every day is a new chance to improve yourself!"
-]
-
-TIPS = [
-    "💡 Tip: Stay consistent!",
-    "💡 Tip: Focus on one task at a time!",
-    "💡 Tip: Review your goals daily!"
-]
+# --- MOTIVATIONS & TIPS ---
+MOTIVATIONS = ["🔥 Keep pushing, you're doing amazing!", "💪 Small steps every day lead to big success.", "🚀 You’re on your way to greatness!", "🌟 Consistency is key, stay focused!", "🏆 Every completed task is a victory!"]
+TIPS = ["💡 Tip: Stay consistent!", "💡 Tip: Focus on one task at a time!", "💡 Tip: Review your goals daily!"]
 
 # --- Russian Versions ---
-MOTIVATIONS_RU = [
-    "🔥 Продолжай в том же духе, ты молодец!",
-    "💪 Маленькие шаги каждый день ведут к успеху.",
-    "🚀 Ты на пути к великим достижениям!",
-    "🌟 Последовательность – ключ к успеху!",
-    "🏆 Каждая выполненная задача – победа!",
-    "✨ Прогресс важнее совершенства.",
-    "🎯 Сосредоточься на одной цели за раз!",
-    "🚴‍♂️ Движение вперёд приводит к успеху!",
-    "⏳ Не жди идеального момента, действуй сейчас!",
-    "🌄 Каждый день — новая возможность стать лучше!"
-]
+MOTIVATIONS_RU = ["🔥 Продолжай в том же духе, ты молодец!", "💪 Маленькие шаги каждый день ведут к успеху.", "🚀 Ты на пути к великим достижениям!", "🌟 Последовательность – ключ к успеху!", "🏆 Каждая выполненная задача – победа!"]
+TIPS_RU = ["💡 Совет: Будь последовательным!", "💡 Совет: Сосредоточься на одной задаче!", "💡 Совет: Пересматривай свои цели каждый день!"]
 
-TIPS_RU = [
-    "💡 Совет: Будь последовательным!",
-    "💡 Совет: Сосредоточься на одной задаче!",
-    "💡 Совет: Пересматривай свои цели каждый день!"
-]
-
-# ✅ Helper functions to get random motivation or tip
-def get_motivation(lang: str) -> str:
-    """Return a random motivational message based on language."""
+def get_motivation(lang):
     return random.choice(MOTIVATIONS_RU) if lang == "ru" else random.choice(MOTIVATIONS)
 
-def get_tip(lang: str) -> str:
-    """Return a random tip based on language."""
+def get_tip(lang):
     return random.choice(TIPS_RU) if lang == "ru" else random.choice(TIPS)
-
 
 # --- RANK SYSTEM ---
 def get_rank(xp):
@@ -159,7 +177,7 @@ def get_rank(xp):
     elif xp < 2500:
         return "🏆 Consistency Master"
     else:
-        return "🗽 Productivity Legend"
+        return "🌟 Productivity Legend"
 
 # --- XP SYSTEM & STREAKS ---
 # --- XP SYSTEM ---
@@ -198,19 +216,10 @@ def random_tip():
 # ===============================
 # ✅ NEW: BACKUP FEATURE
 # ===============================
-def cleanup_old_backups(keep=7):
-    """Keep only the most recent `keep` backup files."""
-    backups = sorted(glob.glob("backup_*.json"))
-    while len(backups) > keep:
-        os.remove(backups[0])  # delete oldest
-        backups.pop(0)
-
 def create_backup():
-    """Create a timestamped backup and clean old ones."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_file = f"backup_{timestamp}.json"
     shutil.copy(DATA_FILE, backup_file)
-    cleanup_old_backups()  # ✅ ensures only last 7 backups are kept
     return backup_file
 
 @dp.message(Command("backup"))
@@ -288,8 +297,6 @@ async def check_reminders():
         await asyncio.sleep(60)  # check every minute
 
 
-MORNING_IMAGE = "media/morning.jpg"
-
 # --- MOTIVATIONAL REMINDERS ---
 async def scheduled_motivation():
     tz = pytz.timezone("Asia/Tashkent")
@@ -305,30 +312,6 @@ async def scheduled_motivation():
                 await bot.send_message(uid, msg + "\n" + get_tip(lang))
             await asyncio.sleep(60)
         await asyncio.sleep(30)
-
-async def send_morning_motivation():
-    """Send a morning motivation image with caption to all users."""
-    caption = "🌅 Good morning! \nStart your day strong and stay productive!🎐 "
-
-    for uid in list(DATA["users"].keys()):
-        try:
-            if os.path.exists(MORNING_IMAGE):
-                await bot.send_photo(int(uid), types.FSInputFile(MORNING_IMAGE), caption=caption)
-            else:
-                await bot.send_message(int(uid), "🌅 Good morning! (No image found today)")
-        except Exception as e:
-            print(f"[Morning Motivation Error] {e}")
-
-async def scheduled_morning_images():
-    """Scheduler to send the image at 07:00 every day."""
-    tz = pytz.timezone("Asia/Tashkent")
-    while True:
-        now = datetime.now(tz).strftime("%H:%M")
-        if now == "07:00":
-            await send_morning_motivation()
-            await asyncio.sleep(60)  # wait a minute to avoid duplicate sends
-        await asyncio.sleep(30)        
-
 
 # --- COMMAND HANDLERS ---
 @dp.message(Command("start"))
@@ -373,7 +356,6 @@ async def list_tasks(message: Message):
 
     await message.answer("📝 <b>Your Tasks:</b>\n" + "\n".join(task_lines))
 
-
 @dp.message(lambda m: m.text == "✅ Mark Done")
 async def mark_done_prompt(message: Message):
     user = get_or_create_user(str(message.from_user.id), message.from_user.first_name)
@@ -381,7 +363,11 @@ async def mark_done_prompt(message: Message):
     if not user["tasks"]:
         await message.answer(TEXTS[lang]["no_tasks"])
         return
-    task_list = "\n".join([f"{i+1}. {t}" for i, t in enumerate(user["tasks"])])
+    task_list = "\n".join([
+    f"{i+1}. {t['text']}" if isinstance(t, dict) else f"{i+1}. {t}"
+    for i, t in enumerate(user["tasks"])
+    ])
+
     await message.answer(TEXTS[lang]["mark_done"].format(task_list))
 
 @dp.message(lambda m: m.text == "📊 Daily Report")
@@ -496,16 +482,15 @@ async def leaderboard(message: Message):
         board_safe = board.replace("<", "&lt;").replace(">", "&gt;")
 
         ranks_info = (
-            "\n\n<b>Ранги:</b>\n🎯 Новичок &lt;200 XP\n⚡ Достигающий 200–499 XP\n🔥 Уничтожитель задач 500–1199 XP\n🏆 Мастер 1200–2499 XP\n🗽 Легенда 2500+ XP"
+            "\n\n<b>Ранги:</b>\n🎯 Новичок &lt;200 XP\n⚡ Достигающий 200–499 XP\n🔥 Уничтожитель задач 500–1199 XP\n🏆 Мастер 1200–2499 XP\n🌟 Легенда 2500+ XP"
             if lang == "ru" else
-            "\n\n<b>Ranks:</b>\n🎯 Rookie &lt;200 XP\n⚡ Achiever 200–499 XP\n🔥 Crusher 500–1199 XP\n🏆 Master 1200–2499 XP\n🗽 Legend 2500+ XP"
+            "\n\n<b>Ranks:</b>\n🎯 Rookie &lt;200 XP\n⚡ Achiever 200–499 XP\n🔥 Crusher 500–1199 XP\n🏆 Master 1200–2499 XP\n🌟 Legend 2500+ XP"
         )
 
         await message.answer(TEXTS[lang]["leaderboard"].format(board_safe) + ranks_info)
 
     except Exception as e:
         await message.answer(f"⚠️ Leaderboard error: {e}")
-
 
 
 
@@ -570,7 +555,6 @@ async def catch_all(message: Message):
     await message.answer("ℹ️ Use buttons or commands to interact.")
 
 
-
 # --- SCHEDULED REPORTS ---
 async def scheduled_reports():
     tz = pytz.timezone("Asia/Tashkent")
@@ -589,9 +573,10 @@ async def main():
     print("✅ Bot running with deadlines, backup & titles...")
     asyncio.create_task(scheduled_reports())
     asyncio.create_task(scheduled_motivation())
-    asyncio.create_task(scheduled_morning_images())
     asyncio.create_task(check_reminders())  # ✅ start reminder loop
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
